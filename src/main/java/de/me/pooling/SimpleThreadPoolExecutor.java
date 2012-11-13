@@ -335,77 +335,21 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		}
 
 
-
 		@Override
 		public void run() {
 			try {
 				Runnable command = this.command.get();
 
 				do {
-					log.debug("Executing task");
-
-					try {
-						command.run();
-
-						log.debug("Task finished successfully");
-					}
-					catch (Throwable e) {
-						log.debug("Task execution failed", e);
-
-						try {
-							uncaughtExceptionHandler.uncaughtException(this, e);
-						}
-						catch (Throwable ee) {
-							log.error("Uncaught exception handler failed", ee);
-						}
-					}
+					executeCommand(command);
 
 
 					taskQueueLock.lockInterruptibly();
 					try {
-						command = taskQueue.poll();
-						if (command != null) {
-							if (log.isDebugEnabled()) {
-								log.debug("Got task from task queue, remaining {}", taskQueue.size());
-							}
+						command = tryGetNextCommand();
+						if (command != null) continue;
 
-							taskQueueNotFull.signalAll();
-							continue;
-						}
-
-						threadQueue.addFirst(this);
-						if (log.isDebugEnabled()) {
-							log.debug("Free threads now {}", threadQueue.size());
-						}
-
-						for (;;) {
-							long waittime = threadTimeoutUnit.toNanos(threadTimeout);
-
-							do {
-								log.trace("Waiting for {} ns", waittime);
-
-								waittime = taskQueueNotEmpty.awaitNanos(waittime);
-							}
-							while (waittime > 0L && (command = this.command.get()) == null && !isShutdown());
-
-
-							if (command == null) {
-								log.debug("Waited");
-
-								if (isShutdown() || totalThreads > corePoolSize) {
-									threadQueue.remove(this);
-									totalThreads--;
-
-									log.debug("Pool thread exit, remaining threads: {}", totalThreads);
-
-									if (totalThreads == 0) {
-										doTerminate();
-									}
-									break;
-								}
-							}
-							else log.debug("Have new command");
-						}
+						command = waitForNextCommand();
 					}
 					finally {
 						taskQueueLock.unlock();
@@ -415,6 +359,93 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 			}
 			catch (InterruptedException e) {
 				log.debug("Interrupted", e);
+			}
+		}
+
+
+		private void executeCommand(Runnable command) {
+			try {
+				log.debug("Executing task");
+
+				command.run();
+
+				log.debug("Task finished successfully");
+			}
+			catch (Throwable e) {
+				log.debug("Task execution failed", e);
+
+				try {
+					uncaughtExceptionHandler.uncaughtException(this, e);
+				}
+				catch (Throwable ee) {
+					log.error("Uncaught exception handler failed", ee);
+				}
+			}
+		}
+
+
+		private Runnable tryGetNextCommand() {
+			final Runnable command = taskQueue.poll();
+
+			if (command == null) {
+				threadQueue.addFirst(this);
+				if (log.isDebugEnabled()) log.debug("No immediate tasks, free threads now {}", threadQueue.size());
+			}
+			else {
+				taskQueueNotFull.signalAll();
+				if (log.isDebugEnabled()) log.debug("Got task from task queue, remaining {}", taskQueue.size());
+			}
+
+			return command;
+		}
+
+
+		private Runnable waitForNextCommand() throws InterruptedException {
+			Runnable command;
+			long waittime;
+
+			for (;;) {
+				waittime = threadTimeoutUnit.toNanos(threadTimeout);
+
+				for (;;) {
+					log.trace("Waiting for {} ns", waittime);
+
+					waittime = taskQueueNotEmpty.awaitNanos(waittime);
+
+					command = this.command.get();
+					if (command != null) {
+						log.debug("Have new command");
+						return command;
+					}
+
+					if (isShutdown()) {
+						log.debug("Shutdown detected");
+
+						finishPoolThread();
+						return null;
+					}
+
+					if (waittime <= 0L) {
+						log.debug("Waited");
+
+						if (totalThreads > corePoolSize) {
+							finishPoolThread();
+							return null;
+						}
+					}
+				}
+			}
+		}
+
+
+		private void finishPoolThread() {
+			threadQueue.remove(this);
+			totalThreads--;
+
+			log.debug("Pool thread exit, remaining threads: {}", totalThreads);
+
+			if (totalThreads == 0) {
+				doTerminate();
 			}
 		}
 
