@@ -1,7 +1,9 @@
 package de.me.pooling;
 
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -17,6 +19,12 @@ public class SimpleThreadPoolExecutorTest {
 	@Before
 	public void setup() throws Exception {
 		executor = new SimpleThreadPoolExecutor();
+	}
+
+	@After
+	public void destroy() throws Exception {
+		List<Runnable> rem = executor.shutdownNow();
+		log.debug("Shutdown now remaining: {}", rem);
 	}
 
 
@@ -46,6 +54,7 @@ public class SimpleThreadPoolExecutorTest {
 		executor.setCorePoolSize(0);
 		executor.setMaxPoolSize(1);
 		executor.setMaxQueuedTasks(1);
+		executor.setThreadTimeoutMillis(100);
 
 		log.debug("Exec task 1");
 		executor.execute(new Runnable() {

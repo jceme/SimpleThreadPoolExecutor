@@ -2,6 +2,7 @@ package de.me.pooling;
 
 import java.lang.Thread.UncaughtExceptionHandler;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.LinkedList;
 import java.util.List;
@@ -122,9 +123,12 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 	@Override
 	public void shutdown() {
+		if (isShutdown()) return;
+
 		taskQueueLock.lock();
 		try {
 			if (!setState(STATE_SHUTDOWN)) return;
+			log.debug("Shutting down executor");
 
 			if (totalThreads > 0) {
 				threadTimeout = 0L;
@@ -132,9 +136,11 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 				corePoolSize = 0;
 
+				log.trace("Let remaining threads finish: {}", totalThreads);
 				taskQueueNotEmpty.signalAll();
 			}
 			else {
+				log.trace("No active threads");
 				doTerminate();
 			}
 		}
@@ -147,14 +153,19 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	public List<Runnable> shutdownNow() {
 		shutdown();
 
+		if (isShutdown()) return Collections.emptyList();
+
 		List<Runnable> remainingTasks;
 
 		taskQueueLock.lock();
 		try {
+			if (isShutdown()) return Collections.emptyList();
+
 			remainingTasks = new ArrayList<Runnable>(taskQueue);
 			taskQueue.clear();
 
 			threadGroup.interrupt();
+			if (log.isTraceEnabled()) log.trace("Shut down now, drained threads: {}", remainingTasks.size());
 		}
 		finally {
 			taskQueueLock.unlock();
@@ -205,12 +216,17 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 	@Override
 	public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+		if (isTerminated()) return true;
+
 		terminateLock.lockInterruptibly();
 		try {
 			if (isTerminated()) return true;
 			if (timeout <= 0L) return false;
 
-			return terminateCondition.await(timeout, unit);
+			log.debug("Awaiting termination for {} {}", timeout, unit);
+			boolean result = terminateCondition.await(timeout, unit);
+			log.debug("Awaited termination: {}", result);
+			return result;
 		}
 		finally {
 			terminateLock.unlock();
@@ -245,14 +261,18 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 		taskQueueLock.lockInterruptibly();
 		try {
+			log.debug("Execute new command with timeout {} ns", remainingWaitTime);
+
 			do {
 				// Try to use idle thread
 				if (executeWithIdleThread(command)) {
+					log.debug("Executing with idle thread");
 					return true;
 				}
 
 				// Try to create new pool thread
 				if (executeWithNewThread(command)) {
+					log.debug("Executing with newly created thread");
 					return true;
 				}
 
@@ -272,7 +292,11 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	private boolean executeWithIdleThread(Runnable command) {
 		PoolThread thread = threadQueue.poll();
 
-		if (thread == null) return false;
+		if (thread == null) {
+			log.trace("Have no idle thread");
+			return false;
+		}
+		log.trace("Using idle thread {}", thread);
 
 		thread.setNextCommand(command);
 
@@ -281,10 +305,14 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	}
 
 	private boolean executeWithNewThread(Runnable command) {
-		if (totalThreads >= maxPoolSize) return false;
+		if (totalThreads >= maxPoolSize) {
+			log.trace("Cannot create new thread, maximum of {} reached: {}", maxPoolSize, totalThreads);
+			return false;
+		}
 
 		PoolThread thread = createNewThread(command);
 		totalThreads++;
+		log.trace("Created new thread: {} (total: {})", thread, totalThreads);
 
 		thread.start();
 		return true;
@@ -300,16 +328,26 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	private long addToTaskQueue(Runnable command, long timeout) throws InterruptedException {
 		if (taskQueue.size() < maxQueuedTasks) {
 			taskQueue.add(command);
+			if (log.isTraceEnabled()) log.trace("Command added to task queue ({} of {})", taskQueue.size(), maxQueuedTasks);
+			return 0L;
+		}
+		log.trace("No space left in task queue (max: {})", maxQueuedTasks);
+
+		if (timeout == 0L) {
+			log.trace("Don't wait for task queue");
 			return 0L;
 		}
 
-		if (timeout == 0L) return 0L;
-
 		if (timeout > 0L) {
-			return taskQueueNotFull.awaitNanos(timeout);
+			log.trace("Waiting for task queue: {} ns", timeout);
+			long remaining = taskQueueNotFull.awaitNanos(timeout);
+			log.trace("Waited for task queue, remaining: {} ns", remaining);
+			return remaining;
 		}
 
+		log.trace("Waiting for task queue until space is free");
 		taskQueueNotFull.await();
+		log.trace("Waited for task queue");
 		return 1L;
 	}
 
@@ -337,8 +375,10 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 		@Override
 		public void run() {
+			log.trace("Pool thread ready to start");
+
 			try {
-				Runnable command = this.command.get();
+				Runnable command = this.command.getAndSet(null);
 
 				do {
 					executeCommand(command);
@@ -360,6 +400,8 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 			catch (InterruptedException e) {
 				log.debug("Interrupted", e);
 			}
+
+			log.trace("Pool thread exited");
 		}
 
 
@@ -412,7 +454,7 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 					waittime = taskQueueNotEmpty.awaitNanos(waittime);
 
-					command = this.command.get();
+					command = this.command.getAndSet(null);
 					if (command != null) {
 						log.debug("Have new command");
 						return command;
