@@ -34,6 +34,9 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	private final Condition taskQueueNotEmpty = taskQueueLock.newCondition();
 	private final Condition taskQueueNotFull = taskQueueLock.newCondition();
 
+	private final Deque<PoolThread> threadQueue = new LinkedList<PoolThread>();
+	private final Queue<Runnable> taskQueue = new LinkedList<Runnable>();
+
 	private final AtomicInteger state = new AtomicInteger(0);
 
 	private volatile int totalThreads = 0;
@@ -98,9 +101,6 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		setThreadTimeout(timeout, TimeUnit.MILLISECONDS);
 	}
 
-	private final Deque<PoolThread> threadQueue = new LinkedList<PoolThread>();
-
-	private final Queue<Runnable> taskQueue = new LinkedList<Runnable>();
 	private int maxQueuedTasks = Integer.MAX_VALUE;
 
 	public void setMaxQueuedTasks(int maxQueuedTasks) {
@@ -321,16 +321,19 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 		private final AtomicReference<Runnable> command;
 
+
 		public PoolThread(Runnable command, ThreadGroup group, String name) {
 			super(group, name);
 			this.command = new AtomicReference<Runnable>(command);
 		}
+
 
 		public void setNextCommand(Runnable command) {
 			if (!this.command.compareAndSet(null, command)) {
 				throw new IllegalStateException("Cannot set command when other command present");
 			}
 		}
+
 
 
 		@Override
