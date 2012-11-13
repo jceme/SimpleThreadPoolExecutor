@@ -1,6 +1,7 @@
 package de.me.pooling;
 
 import java.lang.Thread.UncaughtExceptionHandler;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.LinkedList;
 import java.util.List;
@@ -71,6 +72,7 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 	public void setCorePoolSize(int corePoolSize) {
 		if (corePoolSize < 0) throw new IllegalArgumentException("Invalid core pool size");
+		checkNotShutdown();
 		this.corePoolSize = corePoolSize;
 	}
 
@@ -78,6 +80,7 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 	public void setMaxPoolSize(int maxPoolSize) {
 		if (maxPoolSize < 1) throw new IllegalArgumentException("Invalid maximum pool size");
+		checkNotShutdown();
 		this.maxPoolSize = maxPoolSize;
 	}
 
@@ -86,6 +89,7 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 	public void setThreadTimeout(long timeout, TimeUnit unit) {
 		if (unit == null) throw new IllegalArgumentException("Timeout unit required");
+		checkNotShutdown();
 		threadTimeout = Math.max(timeout, 0L);
 		threadTimeoutUnit = unit;
 	}
@@ -118,17 +122,63 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 	@Override
 	public void shutdown() {
-		// TODO Auto-generated method stub
+		taskQueueLock.lock();
+		try {
+			if (!setState(STATE_SHUTDOWN)) return;
+
+			if (totalThreads > 0) {
+				threadTimeout = 0L;
+				threadTimeoutUnit = TimeUnit.NANOSECONDS;
+
+				corePoolSize = 0;
+
+				taskQueueNotEmpty.signalAll();
+			}
+			else {
+				doTerminate();
+			}
+		}
+		finally {
+			taskQueueLock.unlock();
+		}
 	}
 
 	@Override
 	public List<Runnable> shutdownNow() {
-		// TODO Auto-generated method stub
-		return null;
+		shutdown();
+
+		List<Runnable> remainingTasks;
+
+		taskQueueLock.lock();
+		try {
+			remainingTasks = new ArrayList<Runnable>(taskQueue);
+			taskQueue.clear();
+
+			threadGroup.interrupt();
+		}
+		finally {
+			taskQueueLock.unlock();
+		}
+
+		return remainingTasks;
+	}
+
+	private void checkNotShutdown() {
+		if (isShutdown()) throw new IllegalStateException("Executor already shut down");
 	}
 
 	private boolean isState(int state) {
 		return((this.state.get() & state) != 0);
+	}
+
+	private boolean setState(int state) {
+		for (;;) {
+			int currentState = this.state.get();
+
+			if ((currentState & state) != 0) return false;
+
+			if (this.state.compareAndSet(currentState, currentState | state)) return true;
+		}
 	}
 
 	@Override
@@ -141,9 +191,21 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		return isState(STATE_TERMINATED);
 	}
 
+	private void doTerminate() {
+		terminateLock.lock();
+		try {
+			if (!setState(STATE_TERMINATED)) return;
+
+			terminateCondition.signalAll();
+		}
+		finally {
+			terminateLock.unlock();
+		}
+	}
+
 	@Override
 	public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
-		terminateLock.lock();
+		terminateLock.lockInterruptibly();
 		try {
 			if (isTerminated()) return true;
 			if (timeout <= 0L) return false;
@@ -176,7 +238,7 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		if (command == null) throw new IllegalArgumentException("Command required");
 		if (unit == null) throw new IllegalArgumentException("Timeout unit required");
 
-		if (isShutdown()) throw new IllegalStateException("Executor already shut down");
+		checkNotShutdown();
 
 
 		long remainingWaitTime = unit.toNanos(timeout);
@@ -321,17 +383,22 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 								waittime = taskQueueNotEmpty.awaitNanos(waittime);
 							}
-							while (waittime > 0L && (command = this.command.get()) == null);
+							while (waittime > 0L && (command = this.command.get()) == null && !isShutdown());
 
 
 							if (command == null) {
 								log.debug("Waited");
 
-								if (totalThreads > corePoolSize) {
+								if (isShutdown() || totalThreads > corePoolSize) {
 									threadQueue.remove(this);
 									totalThreads--;
 
-									log.debug("Timed out, remaining threads: {}", totalThreads);
+									log.debug("Pool thread exit, remaining threads: {}", totalThreads);
+
+									if (totalThreads == 0) {
+										doTerminate();
+									}
+									break;
 								}
 							}
 							else log.debug("Have new command");
