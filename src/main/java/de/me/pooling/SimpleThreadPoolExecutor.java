@@ -239,7 +239,7 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	public void execute(final Runnable command)
 	throws ExecutionAwaitInterruptedException {
 		try {
-			execute(command, -1L, TimeUnit.MILLISECONDS);
+			execute(-1L, TimeUnit.NANOSECONDS, command);
 		}
 		catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
@@ -249,7 +249,7 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 
 	@Override
-	public boolean execute(final Runnable command, long timeout, TimeUnit unit)
+	public boolean execute(final long timeout, final TimeUnit unit, final Runnable command)
 	throws InterruptedException {
 		if (command == null) throw new IllegalArgumentException("Command required");
 		if (unit == null) throw new IllegalArgumentException("Timeout unit required");
@@ -319,7 +319,7 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	}
 
 	protected PoolThread createNewThread(Runnable command) {
-		PoolThread thread = new PoolThread(command, threadGroup, threadName);
+		PoolThread thread = new PoolThread(command, threadGroup, threadName+"-"+(totalThreads + 1));
 		thread.setDaemon(threadDaemon);
 		thread.setPriority(threadPriority);
 		return thread;

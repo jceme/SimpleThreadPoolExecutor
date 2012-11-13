@@ -1,5 +1,7 @@
 package de.me.pooling;
 
+import static org.junit.Assert.assertEquals;
+
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -52,7 +54,7 @@ public class SimpleThreadPoolExecutorTest {
 	@Test(timeout=60000)
 	public void testLiveTaskExecution() throws Exception {
 		executor.setCorePoolSize(0);
-		executor.setMaxPoolSize(1);
+		executor.setMaxPoolSize(2);
 		executor.setMaxQueuedTasks(1);
 		executor.setThreadTimeoutMillis(100);
 
@@ -103,6 +105,15 @@ public class SimpleThreadPoolExecutorTest {
 				log.debug("Task 3: Finished");
 			}
 		});
+
+		log.debug("Exec task 4, not to start");
+		boolean done = executor.execute(100, TimeUnit.MILLISECONDS, new Runnable() {
+			@Override
+			public void run() {
+				log.debug("Task 4: Started, but shouldn't");
+			}
+		});
+		assertEquals(false, done);
 
 		log.debug("Shutting down");
 		executor.shutdown();

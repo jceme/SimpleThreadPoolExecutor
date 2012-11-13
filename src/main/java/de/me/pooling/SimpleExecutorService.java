@@ -24,13 +24,13 @@ public interface SimpleExecutorService extends ExecutorService {
 	/**
 	 * Executes the given command, waiting the given timeout until the command was added to the command queue.
 	 *
-	 * @param command the command to execute
 	 * @param timeout the timeout to wait for queuing the command, negative to block without timeout
 	 * @param unit the timeout unit
+	 * @param command the command to execute
 	 * @return true, if task was added to the command queue, false if timeout occurred before
 	 * @throws InterruptedException if waiting thread was interrupted
 	 * @throws IllegalStateException if executor is already in shutdown or terminated
 	 */
-	public boolean execute(Runnable command, long timeout, TimeUnit unit) throws InterruptedException;
+	public boolean execute(long timeout, TimeUnit unit, Runnable command) throws InterruptedException;
 
 }
