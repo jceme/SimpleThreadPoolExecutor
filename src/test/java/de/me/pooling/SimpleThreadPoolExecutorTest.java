@@ -52,9 +52,18 @@ public class SimpleThreadPoolExecutorTest {
 
 
 	@Test(timeout=60000)
-	public void testLiveTaskExecution() throws Exception {
+	public void testLiveTaskExecution1Thread() throws Exception {
+		doTestLive(1);
+	}
+
+	@Test(timeout=60000)
+	public void testLiveTaskExecution2Threads() throws Exception {
+		doTestLive(2);
+	}
+
+	private void doTestLive(int max) throws Exception {
 		executor.setCorePoolSize(0);
-		executor.setMaxPoolSize(2);
+		executor.setMaxPoolSize(max);
 		executor.setMaxQueuedTasks(1);
 		executor.setThreadTimeoutMillis(100);
 
@@ -114,6 +123,73 @@ public class SimpleThreadPoolExecutorTest {
 			}
 		});
 		assertEquals(false, done);
+
+		log.debug("Shutting down");
+		executor.shutdown();
+
+		log.debug("Wait for termination");
+		boolean term = executor.awaitTermination(6000, TimeUnit.MILLISECONDS);
+		log.debug("Test finished: {}", term);
+	}
+
+	@Test
+	public void testLiveTaskExecutionTimeout() throws Exception {
+		executor.setCorePoolSize(0);
+		executor.setMaxPoolSize(2);
+		executor.setMaxQueuedTasks(1);
+		executor.setThreadTimeoutMillis(800);
+
+		log.debug("Exec task 1");
+		executor.execute(new Runnable() {
+			@Override
+			public void run() {
+				log.debug("Task 1: Started");
+				try {
+					Thread.sleep(500);
+				}
+				catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					log.error("Task 1: Interrupted", e);
+				}
+				log.debug("Task 1: Finished");
+			}
+		});
+
+		log.debug("Exec task 2");
+		executor.execute(new Runnable() {
+			@Override
+			public void run() {
+				log.debug("Task 2: Started");
+				try {
+					Thread.sleep(200);
+				}
+				catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					log.error("Task 2: Interrupted", e);
+				}
+				log.debug("Task 2: Finished");
+			}
+		});
+
+		Thread.sleep(800);
+
+		log.debug("Exec task 3");
+		executor.execute(new Runnable() {
+			@Override
+			public void run() {
+				log.debug("Task 3: Started");
+				try {
+					Thread.sleep(500);
+				}
+				catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					log.error("Task 3: Interrupted", e);
+				}
+				log.debug("Task 3: Finished");
+			}
+		});
+
+		Thread.sleep(800);
 
 		log.debug("Shutting down");
 		executor.shutdown();

@@ -46,7 +46,18 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 	public void setThreadGroup(ThreadGroup threadGroup) {
 		if (threadGroup == null) throw new IllegalArgumentException("Thread group required");
-		this.threadGroup = threadGroup;
+
+		taskQueueLock.lock();
+		try {
+			if (totalThreads > 0) {
+				throw new IllegalStateException("Cannot set thread group with active pool threads");
+			}
+
+			this.threadGroup = threadGroup;
+		}
+		finally {
+			taskQueueLock.unlock();
+		}
 	}
 
 	public void setThreadGroupName(String name) {
@@ -105,6 +116,8 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	private int maxQueuedTasks = Integer.MAX_VALUE;
 
 	public void setMaxQueuedTasks(int maxQueuedTasks) {
+		if (maxQueuedTasks < 0) throw new IllegalArgumentException("Invalid max queued tasks value");
+		checkNotShutdown();
 		this.maxQueuedTasks = maxQueuedTasks;
 	}
 
