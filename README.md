@@ -33,6 +33,14 @@ public class Example {
 		this.executor = executor;
 	}
 	
+	/**
+	 * Shutdown executor when done.
+	 */
+	@PreDestroy
+	public void shutdown() {
+		executor.shutdownNow();
+	}
+	
 	
 	public void runExample() {
 		Executor executor = this.executor;
