@@ -21,6 +21,16 @@ import org.slf4j.LoggerFactory;
 import de.me.pooling.exception.ExecutionAwaitInterruptedException;
 
 
+/**
+ * {@link SimpleExecutorService} implementation using a thread pool.<br><br>
+ *
+ * This executor is trying to execute commands immediately using up to {@link #setMaxPoolSize(int) maxPoolSize} threads.<br>
+ * If the pool cannot be further extended then the commands are queued up to {@link #setMaxQueuedTasks(int) maxQueuedTasks}.<br>
+ * If even the queue is full then the execute methods will block the calling thread.<br><br>
+ *
+ * <b>Note</b> that there is no explicit start method since the executor is started with the first command to execute.<br>
+ * <b>Nevertheless</b> once the executor was shut down, it cannot be used again.
+ */
 public class SimpleThreadPoolExecutor extends AbstractExecutorService implements SimpleExecutorService {
 
 	private static final int STATE_SHUTDOWN = 1;
@@ -44,6 +54,12 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 	private volatile ThreadGroup threadGroup = new ThreadGroup(getClass().getSimpleName());
 
+	/**
+	 * Sets the thread group to use for pool threads.
+	 *
+	 * @param threadGroup the new thread group
+	 * @throws IllegalStateException if pool threads exist currently
+	 */
 	public void setThreadGroup(ThreadGroup threadGroup) {
 		if (threadGroup == null) throw new IllegalArgumentException("Thread group required");
 
@@ -60,12 +76,25 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		}
 	}
 
+	/**
+	 * Sets the thread group name, defaults to this class name.<br>
+	 * <b>Note</b> that this will create a new thread group with the given name.
+	 *
+	 * @param name the new thread group name
+	 * @throws IllegalStateException if pool threads exist currently
+	 */
 	public void setThreadGroupName(String name) {
 		setThreadGroup(new ThreadGroup(name));
 	}
 
 	private volatile String threadName = PoolThread.class.getSimpleName();
 
+	/**
+	 * Sets the pool thread base name, defaults to name of class {@link PoolThread}.<br>
+	 * This name is extended with a dash and number for an actual pool thread.
+	 *
+	 * @param threadName the new thread base name
+	 */
 	public void setThreadName(String threadName) {
 		if (threadName == null) throw new IllegalArgumentException("Thread name required");
 		this.threadName = threadName;
@@ -73,52 +102,124 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 	private volatile boolean threadDaemon = false;
 
+	/**
+	 * Set to <code>true</code> if pool threads should be {@link Thread#setDaemon(boolean) daemon threads}, defaults to <code>false</code>.
+	 */
 	public void setThreadDaemon(boolean threadDaemon) {
 		this.threadDaemon = threadDaemon;
 	}
 
 	private volatile int threadPriority = Thread.NORM_PRIORITY;
 
+	/**
+	 * Sets the {@link Thread#setPriority(int) thread priority}, defaults to {@link Thread#NORM_PRIORITY}.
+	 *
+	 * @param threadPriority the new thread priority
+	 */
 	public void setThreadPriority(int threadPriority) {
 		this.threadPriority = threadPriority;
 	}
 
 	private volatile int corePoolSize = 0;
 
+	/**
+	 * Sets the core pool size, defaults to <code>0</code>.<br>
+	 * Once pool threads reach this level, it will be retained (core threads do not {@link #setThreadTimeout(long, TimeUnit) time out}).
+	 *
+	 * @param corePoolSize the new core pool size
+	 * @throws IllegalStateException if executor already shut down
+	 */
 	public void setCorePoolSize(int corePoolSize) {
 		if (corePoolSize < 0) throw new IllegalArgumentException("Invalid core pool size");
-		checkNotShutdown();
-		this.corePoolSize = corePoolSize;
+
+		taskQueueLock.lock();
+		try {
+			checkNotShutdown();
+			this.corePoolSize = corePoolSize;
+		}
+		finally {
+			taskQueueLock.unlock();
+		}
 	}
 
 	private volatile int maxPoolSize = 10;
 
+	/**
+	 * Sets the maximum pool size, defaults to <code>10</code>.<br>
+	 * Pool threads can {@link #setThreadTimeout(long, TimeUnit) time out} until the {@link #setCorePoolSize(int) core level} is reached.
+	 *
+	 * @param maxPoolSize the new max pool size
+	 * @throws IllegalStateException if executor already shut down
+	 */
 	public void setMaxPoolSize(int maxPoolSize) {
 		if (maxPoolSize < 1) throw new IllegalArgumentException("Invalid maximum pool size");
-		checkNotShutdown();
-		this.maxPoolSize = maxPoolSize;
+
+		taskQueueLock.lock();
+		try {
+			checkNotShutdown();
+			this.maxPoolSize = maxPoolSize;
+		}
+		finally {
+			taskQueueLock.unlock();
+		}
 	}
 
 	private volatile long threadTimeout = 60000L;
 	private volatile TimeUnit threadTimeoutUnit = TimeUnit.MILLISECONDS;
 
+	/**
+	 * Sets the pool thread timeout, defaults to <code>60000 ms</code>.<br>
+	 * Only if thread level is higher than the {@link #setCorePoolSize(int) core level} then idle threads will stop.
+	 *
+	 * @param timeout the timeout
+	 * @param unit the timeout unit
+	 * @throws IllegalStateException if executor already shut down
+	 */
 	public void setThreadTimeout(long timeout, TimeUnit unit) {
 		if (unit == null) throw new IllegalArgumentException("Timeout unit required");
-		checkNotShutdown();
-		threadTimeout = Math.max(timeout, 0L);
-		threadTimeoutUnit = unit;
+
+		taskQueueLock.lock();
+		try {
+			checkNotShutdown();
+			threadTimeout = Math.max(timeout, 0L);
+			threadTimeoutUnit = unit;
+		}
+		finally {
+			taskQueueLock.unlock();
+		}
 	}
 
+	/**
+	 * Sets the pool thread timeout in milliseconds.
+	 *
+	 * @param timeout the new thread timeout in ms
+	 * @throws IllegalStateException if executor already shut down
+	 * @see #setThreadTimeout(long, TimeUnit)
+	 */
 	public void setThreadTimeoutMillis(long timeout) {
 		setThreadTimeout(timeout, TimeUnit.MILLISECONDS);
 	}
 
 	private int maxQueuedTasks = Integer.MAX_VALUE;
 
+	/**
+	 * Sets the limit of queued commands, defaults to {@link Integer#MAX_VALUE}.<br>
+	 * This limit does <i>not</i> include executing commands.
+	 *
+	 * @param maxQueuedTasks the new limit
+	 * @throws IllegalStateException if executor already shut down
+	 */
 	public void setMaxQueuedTasks(int maxQueuedTasks) {
 		if (maxQueuedTasks < 0) throw new IllegalArgumentException("Invalid max queued tasks value");
-		checkNotShutdown();
-		this.maxQueuedTasks = maxQueuedTasks;
+
+		taskQueueLock.lock();
+		try {
+			checkNotShutdown();
+			this.maxQueuedTasks = maxQueuedTasks;
+		}
+		finally {
+			taskQueueLock.unlock();
+		}
 	}
 
 	private volatile Thread.UncaughtExceptionHandler uncaughtExceptionHandler = new UncaughtExceptionHandler() {
@@ -128,12 +229,28 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		}
 	};
 
+	/**
+	 * Sets the uncaught exception handler for pool threads.<br>
+	 * By default the errors will be logged in error level.
+	 *
+	 * @param uncaughtExceptionHandler the new handler
+	 */
 	public void setUncaughtExceptionHandler(UncaughtExceptionHandler uncaughtExceptionHandler) {
 		if (uncaughtExceptionHandler == null) throw new IllegalArgumentException("Handler required");
-		this.uncaughtExceptionHandler = uncaughtExceptionHandler;
+
+		taskQueueLock.lock();
+		try {
+			this.uncaughtExceptionHandler = uncaughtExceptionHandler;
+		}
+		finally {
+			taskQueueLock.unlock();
+		}
 	}
 
 
+	/**
+	 * {@inheritDoc}
+	 */
 	@Override
 	public void shutdown() {
 		if (isShutdown()) return;
@@ -162,6 +279,9 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		}
 	}
 
+	/**
+	 * {@inheritDoc}
+	 */
 	@Override
 	public List<Runnable> shutdownNow() {
 		shutdown();
@@ -187,14 +307,26 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		return remainingTasks;
 	}
 
+	/**
+	 * Throws {@link IllegalStateException} if executor is in shut down.
+	 */
 	private void checkNotShutdown() {
 		if (isShutdown()) throw new IllegalStateException("Executor already shut down");
 	}
 
+	/**
+	 * Checks if state is active.
+	 */
 	private boolean isState(int state) {
 		return((this.state.get() & state) != 0);
 	}
 
+	/**
+	 * Activates a state.
+	 *
+	 * @param state the state to activate
+	 * @return true, if successfully set, false if state was already active
+	 */
 	private boolean setState(int state) {
 		for (;;) {
 			int currentState = this.state.get();
@@ -205,16 +337,25 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		}
 	}
 
+	/**
+	 * {@inheritDoc}
+	 */
 	@Override
 	public boolean isShutdown() {
 		return isState(STATE_SHUTDOWN);
 	}
 
+	/**
+	 * {@inheritDoc}
+	 */
 	@Override
 	public boolean isTerminated() {
 		return isState(STATE_TERMINATED);
 	}
 
+	/**
+	 * Terminates this executor.
+	 */
 	private void doTerminate() {
 		terminateLock.lock();
 		try {
@@ -227,6 +368,9 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		}
 	}
 
+	/**
+	 * {@inheritDoc}
+	 */
 	@Override
 	public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
 		if (isTerminated()) return true;
@@ -248,6 +392,9 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 
 
+	/**
+	 * {@inheritDoc}
+	 */
 	@Override
 	public void execute(final Runnable command)
 	throws ExecutionAwaitInterruptedException {
@@ -261,6 +408,9 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	}
 
 
+	/**
+	 * {@inheritDoc}
+	 */
 	@Override
 	public boolean execute(final long timeout, final TimeUnit unit, final Runnable command)
 	throws InterruptedException {
@@ -289,7 +439,7 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 					return true;
 				}
 
-				// Put command into task queue
+				// Try to put command into task queue
 				remainingWaitTime = addToTaskQueue(command, timeout < 0 ? timeout : remainingWaitTime);
 			}
 			while (remainingWaitTime > 0L);
@@ -302,6 +452,12 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	}
 
 
+	/**
+	 * Try to execute command with an idle pool thread.
+	 *
+	 * @param command the command
+	 * @return true, if successful
+	 */
 	private boolean executeWithIdleThread(Runnable command) {
 		PoolThread thread = threadQueue.poll();
 
@@ -317,6 +473,12 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		return true;
 	}
 
+	/**
+	 * Try to execute command with a new pool thread.
+	 *
+	 * @param command the command
+	 * @return true, if successful
+	 */
 	private boolean executeWithNewThread(Runnable command) {
 		if (totalThreads >= maxPoolSize) {
 			log.trace("Cannot create new thread, maximum of {} reached: {}", maxPoolSize, totalThreads);
@@ -331,6 +493,12 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		return true;
 	}
 
+	/**
+	 * Creates a new pool thread.
+	 *
+	 * @param command the pool task to execute in the thread
+	 * @return the pool thread
+	 */
 	protected PoolThread createNewThread(Runnable command) {
 		PoolThread thread = new PoolThread(command, threadGroup, threadName+"-"+(totalThreads + 1));
 		thread.setDaemon(threadDaemon);
@@ -338,6 +506,13 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		return thread;
 	}
 
+	/**
+	 * Try to add the command to task queue.
+	 *
+	 * @param command the command
+	 * @param timeout the waiting timeout
+	 * @return the remaining time to wait in next try
+	 */
 	private long addToTaskQueue(Runnable command, long timeout) throws InterruptedException {
 		if (taskQueue.size() < maxQueuedTasks) {
 			taskQueue.add(command);
@@ -366,6 +541,9 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 
 
+	/**
+	 * A pool thread.
+	 */
 	protected class PoolThread extends Thread {
 
 		private final Logger log = LoggerFactory.getLogger(getClass());
@@ -373,12 +551,25 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		private final AtomicReference<Runnable> command;
 
 
+		/**
+		 * Instantiates a new pool thread.
+		 *
+		 * @param command the command to execute immediately after start
+		 * @param group the pool's thread group
+		 * @param name the thread name
+		 */
 		public PoolThread(Runnable command, ThreadGroup group, String name) {
 			super(group, name);
 			this.command = new AtomicReference<Runnable>(command);
 		}
 
 
+		/**
+		 * Sets the next command to execute.
+		 *
+		 * @param command the next command
+		 * @throws IllegalStateException if a command is still set to execute
+		 */
 		public void setNextCommand(Runnable command) {
 			if (!this.command.compareAndSet(null, command)) {
 				throw new IllegalStateException("Cannot set command when other command present");
@@ -386,6 +577,9 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		}
 
 
+		/**
+		 * In a loop executes the set command and waits for new command, optionally timing out.
+		 */
 		@Override
 		public void run() {
 			log.trace("Pool thread ready to start");
@@ -418,6 +612,9 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		}
 
 
+		/**
+		 * Executes the given command.
+		 */
 		private void executeCommand(Runnable command) {
 			try {
 				log.debug("Executing task");
@@ -439,6 +636,11 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		}
 
 
+		/**
+		 * Tries to get next command, otherwise putting itself into the idle thread pool.
+		 *
+		 * @return the next command or <code>null</code> if no command available
+		 */
 		private Runnable tryGetNextCommand() {
 			final Runnable command = taskQueue.poll();
 
@@ -455,6 +657,11 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		}
 
 
+		/**
+		 * Waits for the next command.
+		 *
+		 * @return the next command or <code>null</code> if no command available
+		 */
 		private Runnable waitForNextCommand() throws InterruptedException {
 			Runnable command;
 			long waittime;
@@ -493,6 +700,9 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		}
 
 
+		/**
+		 * Finishes this pool thread by removing it from the idle thread pool.
+		 */
 		private void finishPoolThread() {
 			threadQueue.remove(this);
 			totalThreads--;
