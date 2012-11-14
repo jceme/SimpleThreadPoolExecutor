@@ -132,7 +132,7 @@ public class SimpleThreadPoolExecutorTest {
 		log.debug("Test finished: {}", term);
 	}
 
-	@Test
+	@Test(timeout=60000)
 	public void testLiveTaskExecutionTimeout() throws Exception {
 		executor.setCorePoolSize(0);
 		executor.setMaxPoolSize(2);
@@ -197,6 +197,15 @@ public class SimpleThreadPoolExecutorTest {
 		log.debug("Wait for termination");
 		boolean term = executor.awaitTermination(6000, TimeUnit.MILLISECONDS);
 		log.debug("Test finished: {}", term);
+	}
+
+
+	@Test(timeout=10000)
+	public void testPrestartCoreThreads() throws Exception {
+		executor.setMaxPoolSize(10);
+		executor.setCorePoolSize(10);
+
+		executor.prestartCoreThreads();
 	}
 
 }

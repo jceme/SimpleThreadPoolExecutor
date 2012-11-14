@@ -359,9 +359,11 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	private void doTerminate() {
 		terminateLock.lock();
 		try {
+			if (!isShutdown()) return;
 			if (!setState(STATE_TERMINATED)) return;
 
 			terminateCondition.signalAll();
+			log.debug("Executor terminated");
 		}
 		finally {
 			terminateLock.unlock();
@@ -412,8 +414,16 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	 * {@inheritDoc}
 	 */
 	@Override
-	public boolean execute(final long timeout, final TimeUnit unit, final Runnable command)
-	throws InterruptedException {
+	public boolean executeImmediately(final Runnable command) throws InterruptedException {
+		return execute(0L, TimeUnit.NANOSECONDS, command);
+	}
+
+
+	/**
+	 * {@inheritDoc}
+	 */
+	@Override
+	public boolean execute(final long timeout, final TimeUnit unit, final Runnable command) throws InterruptedException {
 		if (command == null) throw new IllegalArgumentException("Command required");
 		if (unit == null) throw new IllegalArgumentException("Timeout unit required");
 
@@ -550,7 +560,7 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 			while (--needed >= 0) {
 				try {
-					boolean done = execute(0L, TimeUnit.NANOSECONDS, new Runnable() {
+					boolean done = executeImmediately(new Runnable() {
 						@Override
 						public void run() {
 							log.trace("Pre-started new core thread");
@@ -745,7 +755,12 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 			log.debug("Pool thread exit, remaining threads: {}", totalThreads);
 
 			if (totalThreads == 0) {
-				doTerminate();
+				log.debug("No more threads in pool");
+
+				if (isShutdown()) {
+					log.debug("Terminating after last pool thread finished");
+					doTerminate();
+				}
 			}
 		}
 
