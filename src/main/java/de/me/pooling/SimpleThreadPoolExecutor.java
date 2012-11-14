@@ -540,9 +540,44 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	}
 
 
+	/**
+	 * Pre-start pool threads up to the {@link #setCorePoolSize(int) core level}.
+	 */
+	public void prestartCoreThreads() {
+		taskQueueLock.lock();
+		try {
+			int needed = Math.max(corePoolSize - totalThreads, 0);
+
+			while (--needed >= 0) {
+				try {
+					boolean done = execute(0L, TimeUnit.NANOSECONDS, new Runnable() {
+						@Override
+						public void run() {
+							log.trace("Pre-started new core thread");
+						}
+					});
+
+					if (!done) {
+						// should not happen
+						throw new ExecutionAwaitInterruptedException("Failed to pre-start core threads");
+					}
+				}
+				catch (InterruptedException e) {
+					// should not occur
+					Thread.currentThread().interrupt();
+					throw new ExecutionAwaitInterruptedException(e);
+				}
+			}
+		}
+		finally {
+			taskQueueLock.unlock();
+		}
+	}
+
+
 
 	/**
-	 * A pool thread.
+	 * Class for pool threads.
 	 */
 	protected class PoolThread extends Thread {
 
