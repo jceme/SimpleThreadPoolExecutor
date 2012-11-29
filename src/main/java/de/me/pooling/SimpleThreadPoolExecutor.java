@@ -266,7 +266,10 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 				corePoolSize = 0;
 
-				log.trace("Let remaining threads finish: {}", totalThreads);
+				if (log.isTraceEnabled()) {
+					log.trace("Remaining threads: {}, remaining queued tasks: {}", totalThreads, taskQueue.size());
+				}
+
 				taskQueueNotEmpty.signalAll();
 			}
 			else {
@@ -286,25 +289,26 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	public List<Runnable> shutdownNow() {
 		shutdown();
 
-		if (isShutdown()) return Collections.emptyList();
-
-		List<Runnable> remainingTasks;
+		if (isTerminated()) return Collections.emptyList();
 
 		taskQueueLock.lock();
 		try {
-			if (isShutdown()) return Collections.emptyList();
+			if (isTerminated()) return Collections.emptyList();
 
-			remainingTasks = new ArrayList<Runnable>(taskQueue);
+			List<Runnable> remainingTasks = new ArrayList<Runnable>(taskQueue);
 			taskQueue.clear();
 
 			threadGroup.interrupt();
-			if (log.isTraceEnabled()) log.trace("Shut down now, drained threads: {}", remainingTasks.size());
+
+			if (log.isTraceEnabled()) {
+				log.trace("Shut down now, drained threads: {}, remaining threads: {}", remainingTasks.size(), totalThreads);
+			}
+
+			return remainingTasks;
 		}
 		finally {
 			taskQueueLock.unlock();
 		}
-
-		return remainingTasks;
 	}
 
 	/**
@@ -357,9 +361,10 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	 * Terminates this executor.
 	 */
 	private void doTerminate() {
+		if (isTerminated() || !isShutdown()) return;
+
 		terminateLock.lock();
 		try {
-			if (!isShutdown()) return;
 			if (!setState(STATE_TERMINATED)) return;
 
 			terminateCondition.signalAll();
@@ -398,8 +403,7 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	 * {@inheritDoc}
 	 */
 	@Override
-	public void execute(final Runnable command)
-	throws ExecutionAwaitInterruptedException {
+	public void execute(final Runnable command) throws ExecutionAwaitInterruptedException {
 		try {
 			execute(-1L, TimeUnit.NANOSECONDS, command);
 		}
@@ -414,8 +418,15 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 	 * {@inheritDoc}
 	 */
 	@Override
-	public boolean executeImmediately(final Runnable command) throws InterruptedException {
-		return execute(0L, TimeUnit.NANOSECONDS, command);
+	public boolean executeImmediately(final Runnable command) {
+		try {
+			return execute(0L, TimeUnit.NANOSECONDS, command);
+		}
+		catch (InterruptedException e) {
+			// Should not occur
+			Thread.currentThread().interrupt();
+			throw new ExecutionAwaitInterruptedException(e);
+		}
 	}
 
 
@@ -431,11 +442,10 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 
 
 		long remainingWaitTime = unit.toNanos(timeout);
+		log.debug("Execute new command with timeout {} ns", remainingWaitTime);
 
 		taskQueueLock.lockInterruptibly();
 		try {
-			log.debug("Execute new command with timeout {} ns", remainingWaitTime);
-
 			do {
 				// Try to use idle thread
 				if (executeWithIdleThread(command)) {
@@ -559,23 +569,16 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 			int needed = Math.max(corePoolSize - totalThreads, 0);
 
 			while (--needed >= 0) {
-				try {
-					boolean done = executeImmediately(new Runnable() {
-						@Override
-						public void run() {
-							log.trace("Pre-started new core thread");
-						}
-					});
-
-					if (!done) {
-						// should not happen
-						throw new ExecutionAwaitInterruptedException("Failed to pre-start core threads");
+				boolean done = executeImmediately(new Runnable() {
+					@Override
+					public void run() {
+						log.trace("Pre-started new core thread");
 					}
-				}
-				catch (InterruptedException e) {
-					// should not occur
-					Thread.currentThread().interrupt();
-					throw new ExecutionAwaitInterruptedException(e);
+				});
+
+				if (!done) {
+					// Should not happen
+					throw new ExecutionAwaitInterruptedException("Failed to pre-start core threads");
 				}
 			}
 		}
@@ -651,6 +654,14 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 			}
 			catch (InterruptedException e) {
 				log.debug("Interrupted", e);
+
+				taskQueueLock.lock();
+				try {
+					finishPoolThread();
+				}
+				finally {
+					taskQueueLock.unlock();
+				}
 			}
 
 			log.trace("Pool thread exited");
@@ -661,6 +672,8 @@ public class SimpleThreadPoolExecutor extends AbstractExecutorService implements
 		 * Executes the given command.
 		 */
 		private void executeCommand(Runnable command) {
+			if (command == null) return;
+
 			try {
 				log.debug("Executing task");
 

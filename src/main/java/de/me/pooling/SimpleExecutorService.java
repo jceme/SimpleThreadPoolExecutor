@@ -31,11 +31,11 @@ public interface SimpleExecutorService extends ExecutorService {
 	 *
 	 * @param command the command to execute
 	 * @return true, if task was executed or added to the command queue, false if command queue was full
-	 * @throws InterruptedException if calling thread was interrupted
+	 * @throws ExecutionAwaitInterruptedException if calling thread was interrupted (which should not happen)
 	 * @throws IllegalStateException if executor is already in shutdown or terminated
 	 * @see #execute(long, TimeUnit, Runnable)
 	 */
-	public boolean executeImmediately(Runnable command) throws InterruptedException;
+	public boolean executeImmediately(Runnable command);
 
 
 	/**

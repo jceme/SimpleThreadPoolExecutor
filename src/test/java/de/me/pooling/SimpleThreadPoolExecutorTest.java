@@ -2,8 +2,11 @@ package de.me.pooling;
 
 import static org.junit.Assert.assertEquals;
 
+import java.lang.Thread.UncaughtExceptionHandler;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.After;
 import org.junit.Before;
@@ -206,6 +209,127 @@ public class SimpleThreadPoolExecutorTest {
 		executor.setCorePoolSize(10);
 
 		executor.prestartCoreThreads();
+	}
+
+
+	@Test(timeout=10000)
+	public void testNonEmptyShutdownNow() throws Exception {
+		executor.setMaxPoolSize(1);
+		executor.setCorePoolSize(0);
+		executor.setMaxQueuedTasks(10);
+
+		final AtomicBoolean task1Interrupted = new AtomicBoolean(false);
+		Runnable task2, task3;
+
+		log.debug("Exec task 1");
+		executor.execute(new Runnable() {
+			@Override
+			public void run() {
+				log.debug("Task 1: Started");
+				try {
+					Thread.sleep(500);
+				}
+				catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					task1Interrupted.set(true);
+					log.debug("Task 1: Interrupted", e);
+				}
+				log.debug("Task 1: Finished");
+			}
+		});
+
+		log.debug("Exec task 2");
+		executor.execute(task2 = new Runnable() {
+			@Override
+			public void run() {
+				throw new IllegalStateException("Must not be executed");
+			}
+		});
+
+		log.debug("Exec task 3");
+		executor.execute(task3 = new Runnable() {
+			@Override
+			public void run() {
+				throw new IllegalStateException("Must not be executed");
+			}
+		});
+
+		log.debug("Shutting down now");
+		List<Runnable> remaining = executor.shutdownNow();
+
+		log.debug("Wait for termination");
+		boolean term = executor.awaitTermination(6000, TimeUnit.MILLISECONDS);
+
+		assertEquals(true, term);
+		assertEquals(Arrays.asList(task2, task3), remaining);
+		assertEquals(true, task1Interrupted.get());
+		assertEquals(true, executor.isShutdown());
+		assertEquals(true, executor.isTerminated());
+	}
+
+	@Test(timeout=10000)
+	public void testFailingCommand() throws Exception {
+		executor.setMaxPoolSize(1);
+		executor.setCorePoolSize(0);
+
+		log.debug("Exec task 1");
+		executor.execute(new Runnable() {
+			@Override
+			public void run() {
+				log.debug("Task 1: Started");
+				throw new UnsupportedOperationException("Task1 test message");
+			}
+		});
+
+		executor.shutdown();
+
+		log.debug("Wait for termination");
+		boolean term = executor.awaitTermination(6000, TimeUnit.MILLISECONDS);
+		assertEquals(true, term);
+	}
+
+	@Test(timeout=10000)
+	public void testFailingCommandWithCustomHandler() throws Exception {
+		executor.setMaxPoolSize(1);
+		executor.setCorePoolSize(0);
+
+		final AtomicBoolean caught = new AtomicBoolean(false);
+
+		executor.setUncaughtExceptionHandler(new UncaughtExceptionHandler() {
+			@Override
+			public void uncaughtException(Thread t, Throwable e) {
+				if ((e instanceof UnsupportedOperationException) && e.getMessage().equals("Task1 test message")) {
+					caught.set(true);
+				}
+			}
+		});
+
+		log.debug("Exec task 1");
+		executor.execute(new Runnable() {
+			@Override
+			public void run() {
+				log.debug("Task 1: Started");
+				throw new UnsupportedOperationException("Task1 test message");
+			}
+		});
+
+		executor.shutdown();
+
+		log.debug("Wait for termination");
+		boolean term = executor.awaitTermination(6000, TimeUnit.MILLISECONDS);
+		assertEquals(true, term);
+		assertEquals(true, caught.get());
+	}
+
+	@Test
+	public void testImmediateShutdown() throws Exception {
+		executor.shutdown();
+
+		log.debug("Wait for termination");
+		boolean term = executor.awaitTermination(2000, TimeUnit.MILLISECONDS);
+		assertEquals(true, term);
+		assertEquals(true, executor.isShutdown());
+		assertEquals(true, executor.isTerminated());
 	}
 
 }

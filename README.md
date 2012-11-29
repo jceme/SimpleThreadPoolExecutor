@@ -1,7 +1,7 @@
 SimpleThreadPoolExecutor
 ============
 
-A simple thread pool executor using the strategy to execute first, then enqueue, else block.
+A simple thread pool executor using the strategy trying to execute commands first, else enqueue them, else blocking the calling thread.
 
 This executor is trying to execute commands immediately using up to maxPoolSize threads.
 If the pool cannot be further extended then the commands are queued up to maxQueuedTasks.
