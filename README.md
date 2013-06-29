@@ -11,6 +11,8 @@ The SimpleThreadPoolExecutor is compatible with ExecutorService and hence compat
 
 This class is intentionally compatible to Spring configuration.
 
+API documentation: http://jceme.github.io/SimpleThreadPoolExecutor/apidocs/
+
 ```java
 public class Example {
 
